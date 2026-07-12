@@ -47,7 +47,7 @@ jobs:
 
           echo "Outils Wii U disponibles :"
           find /opt/devkitpro \
-            -name "wuhbtool" -o -name "elf2rpl" -o -name "powerpc-eabi-cmake" \
+            \( -name "wuhbtool" -o -name "elf2rpl" -o -name "powerpc-eabi-cmake" \) \
             -print || true
 
       - name: Trouver et décompresser CubeU
@@ -121,4 +121,90 @@ jobs:
           if [ -n "$CMAKE_WIIU" ]; then
             chmod +x "$CMAKE_WIIU"
             echo "CMAKE_WIIU=$CMAKE_WIIU" >> "$GITHUB_ENV"
-            echo "
+            echo "Outil détecté : $CMAKE_WIIU"
+            exit 0
+          fi
+
+          TOOLCHAIN_FILE="$(find /opt/devkitpro \
+            -type f \
+            \( -iname "*wiiu*.cmake" -o -iname "*wut*.cmake" \) \
+            | head -n 1)"
+
+          if [ -z "$TOOLCHAIN_FILE" ]; then
+            echo "ERREUR : aucun outil CMake Wii U trouvé."
+            find /opt/devkitpro -maxdepth 6 -type f \
+              \( -iname "*cmake*" -o -name "elf2rpl" -o -name "wuhbtool" \) \
+              -print || true
+            exit 1
+          fi
+
+          echo "TOOLCHAIN_FILE=$TOOLCHAIN_FILE" >> "$GITHUB_ENV"
+          echo "Toolchain détectée : $TOOLCHAIN_FILE"
+
+      - name: Configurer CubeU
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf "$GITHUB_WORKSPACE/build"
+
+          if [ -n "${CMAKE_WIIU:-}" ]; then
+            "$CMAKE_WIIU" \
+              -S "$PROJECT_DIR" \
+              -B "$GITHUB_WORKSPACE/build" \
+              -DCMAKE_BUILD_TYPE=Release
+          else
+            cmake \
+              -S "$PROJECT_DIR" \
+              -B "$GITHUB_WORKSPACE/build" \
+              -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
+              -DCMAKE_BUILD_TYPE=Release
+          fi
+
+      - name: Compiler CubeU
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake \
+            --build "$GITHUB_WORKSPACE/build" \
+            --parallel 2 \
+            --verbose
+
+      - name: Préparer le résultat
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Fichiers compilés :"
+          find "$GITHUB_WORKSPACE/build" -type f -print
+
+          WUHB_FILE="$(find "$GITHUB_WORKSPACE/build" \
+            -type f \
+            -iname "*.wuhb" \
+            | head -n 1)"
+
+          if [ -z "$WUHB_FILE" ]; then
+            echo "ERREUR : aucun fichier WUHB produit."
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/dist/wiiu/apps/CubeU"
+
+          cp "$WUHB_FILE" \
+            "$GITHUB_WORKSPACE/dist/wiiu/apps/CubeU/CubeU.wuhb"
+
+          if [ -f "$PROJECT_DIR/README.md" ]; then
+            cp "$PROJECT_DIR/README.md" \
+              "$GITHUB_WORKSPACE/dist/wiiu/apps/CubeU/README.txt"
+          fi
+
+          echo "Résultat final :"
+          find "$GITHUB_WORKSPACE/dist" -type f -print
+
+      - name: Publier CubeU
+        uses: actions/upload-artifact@v4
+        with:
+          name: CubeU-v0.0.3-WiiU
+          path: dist/
+          if-no-files-found: error
