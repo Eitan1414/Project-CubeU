@@ -1,0 +1,124 @@
+name: Build CubeU v0.0.3 from ZIP
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "*.zip"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container:
+      image: devkitpro/devkitppc:latest
+
+    steps:
+      - name: Télécharger le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer unzip et les outils Wii U
+        run: |
+          dkp-pacman -Syu --noconfirm --needed wiiu-dev unzip
+
+      - name: Décompresser le projet CubeU
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
+            -maxdepth 1 \
+            -type f \
+            -iname 'CubeU-v0.0.3-project.zip' \
+            | head -n 1)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
+              -maxdepth 1 \
+              -type f \
+              -iname '*.zip' \
+              | head -n 1)"
+          fi
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Erreur : aucun fichier ZIP trouvé à la racine du dépôt."
+            exit 1
+          fi
+
+          echo "Archive utilisée : $ZIP_FILE"
+
+          rm -rf "$GITHUB_WORKSPACE/extracted"
+          mkdir -p "$GITHUB_WORKSPACE/extracted"
+
+          unzip -q "$ZIP_FILE" \
+            -d "$GITHUB_WORKSPACE/extracted"
+
+          PROJECT_DIR="$(find "$GITHUB_WORKSPACE/extracted" \
+            -type f \
+            -name CMakeLists.txt \
+            -printf '%h\n' \
+            | head -n 1)"
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "Erreur : aucun CMakeLists.txt trouvé dans l'archive."
+            find "$GITHUB_WORKSPACE/extracted" -maxdepth 4 -type f
+            exit 1
+          fi
+
+          echo "Projet détecté dans : $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Configurer CubeU
+        shell: bash
+        run: |
+          /opt/devkitpro/portlibs/wiiu/bin/powerpc-eabi-cmake \
+            -S "$PROJECT_DIR" \
+            -B "$GITHUB_WORKSPACE/build" \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compiler CubeU
+        shell: bash
+        run: |
+          cmake --build "$GITHUB_WORKSPACE/build" --parallel
+
+      - name: Préparer le fichier pour la carte SD
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WUHB_FILE="$(find "$GITHUB_WORKSPACE/build" \
+            -type f \
+            -iname '*.wuhb' \
+            | head -n 1)"
+
+          if [ -z "$WUHB_FILE" ]; then
+            echo "Erreur : aucun fichier .wuhb n'a été produit."
+            echo "Contenu du dossier de compilation :"
+            find "$GITHUB_WORKSPACE/build" -maxdepth 4 -type f
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/dist/wiiu/apps/CubeU"
+
+          cp "$WUHB_FILE" \
+            "$GITHUB_WORKSPACE/dist/wiiu/apps/CubeU/CubeU.wuhb"
+
+          if [ -f "$PROJECT_DIR/README.md" ]; then
+            cp "$PROJECT_DIR/README.md" \
+              "$GITHUB_WORKSPACE/dist/wiiu/apps/CubeU/README.txt"
+          fi
+
+          echo "Fichiers préparés :"
+          find "$GITHUB_WORKSPACE/dist" -type f -print
+
+      - name: Envoyer CubeU comme artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CubeU-v0.0.3-WiiU
+          path: dist/
+          if-no-files-found: error
