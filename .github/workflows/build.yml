@@ -27,71 +27,100 @@ jobs:
       - name: Télécharger le dépôt
         uses: actions/checkout@v4
 
-      - name: Vérifier devkitPPC et WUT
+      - name: Vérifier le compilateur
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "DEVKITPRO=$DEVKITPRO"
-          echo "DEVKITPPC=$DEVKITPPC"
-          echo "PATH=$PATH"
-
-          if [ ! -x "$DEVKITPPC/bin/powerpc-eabi-gcc" ]; then
-            echo "ERREUR : compilateur PowerPC absent."
-            find /opt/devkitpro -maxdepth 4 -type f -name "powerpc-eabi-gcc" || true
-            exit 1
-          fi
-
           "$DEVKITPPC/bin/powerpc-eabi-gcc" --version
           cmake --version
-
-          echo "Outils Wii U disponibles :"
-          find /opt/devkitpro \
-            \( -name "wuhbtool" -o -name "elf2rpl" -o -name "powerpc-eabi-cmake" \) \
-            -print || true
 
       - name: Trouver et décompresser CubeU
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
+          rm -rf "$GITHUB_WORKSPACE/extracted"
+          mkdir -p "$GITHUB_WORKSPACE/extracted"
+
+          PROJECT_ZIP="$(find "$GITHUB_WORKSPACE" \
             -maxdepth 1 \
             -type f \
             -iname "CubeU-v0.0.3-project.zip" \
             | head -n 1)"
 
-          if [ -z "$ZIP_FILE" ]; then
-            ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
-              -maxdepth 1 \
-              -type f \
-              -iname "*.zip" \
-              | head -n 1)"
-          fi
+          if [ -n "$PROJECT_ZIP" ]; then
+            echo "ZIP du projet trouvé directement : $PROJECT_ZIP"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERREUR : aucun ZIP trouvé à la racine du dépôt."
-            find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -print
-            exit 1
-          fi
-
-          echo "ZIP utilisé : $ZIP_FILE"
-
-          rm -rf "$GITHUB_WORKSPACE/extracted"
-          mkdir -p "$GITHUB_WORKSPACE/extracted"
-
-          python3 - "$ZIP_FILE" "$GITHUB_WORKSPACE/extracted" <<'PY'
+            python3 - "$PROJECT_ZIP" "$GITHUB_WORKSPACE/extracted" <<'PY'
           import sys
           import zipfile
 
           archive = sys.argv[1]
           destination = sys.argv[2]
 
-          with zipfile.ZipFile(archive, "r") as file:
-              file.extractall(destination)
+          with zipfile.ZipFile(archive, "r") as z:
+              z.extractall(destination)
 
-          print("Décompression terminée.")
+          print("Projet décompressé.")
           PY
+
+          else
+            PACK_ZIP="$(find "$GITHUB_WORKSPACE" \
+              -maxdepth 1 \
+              -type f \
+              -iname "*.zip" \
+              | head -n 1)"
+
+            if [ -z "$PACK_ZIP" ]; then
+              echo "ERREUR : aucun fichier ZIP trouvé."
+              find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -print
+              exit 1
+            fi
+
+            echo "Pack trouvé : $PACK_ZIP"
+
+            mkdir -p "$GITHUB_WORKSPACE/pack"
+
+            python3 - "$PACK_ZIP" "$GITHUB_WORKSPACE/pack" <<'PY'
+          import sys
+          import zipfile
+
+          archive = sys.argv[1]
+          destination = sys.argv[2]
+
+          with zipfile.ZipFile(archive, "r") as z:
+              z.extractall(destination)
+
+          print("Pack décompressé.")
+          PY
+
+            PROJECT_ZIP="$(find "$GITHUB_WORKSPACE/pack" \
+              -type f \
+              -iname "CubeU-v0.0.3-project.zip" \
+              | head -n 1)"
+
+            if [ -z "$PROJECT_ZIP" ]; then
+              echo "ERREUR : CubeU-v0.0.3-project.zip introuvable dans le pack."
+              find "$GITHUB_WORKSPACE/pack" -maxdepth 6 -type f -print
+              exit 1
+            fi
+
+            echo "ZIP intérieur trouvé : $PROJECT_ZIP"
+
+            python3 - "$PROJECT_ZIP" "$GITHUB_WORKSPACE/extracted" <<'PY'
+          import sys
+          import zipfile
+
+          archive = sys.argv[1]
+          destination = sys.argv[2]
+
+          with zipfile.ZipFile(archive, "r") as z:
+              z.extractall(destination)
+
+          print("Projet intérieur décompressé.")
+          PY
+          fi
 
           PROJECT_DIR="$(find "$GITHUB_WORKSPACE/extracted" \
             -type f \
@@ -100,15 +129,15 @@ jobs:
             | head -n 1)"
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERREUR : CMakeLists.txt introuvable dans le ZIP."
-            find "$GITHUB_WORKSPACE/extracted" -maxdepth 6 -type f -print
+            echo "ERREUR : CMakeLists.txt introuvable après décompression."
+            find "$GITHUB_WORKSPACE/extracted" -maxdepth 8 -type f -print
             exit 1
           fi
 
           echo "Projet détecté : $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Trouver le système CMake Wii U
+      - name: Trouver CMake Wii U
         shell: bash
         run: |
           set -euo pipefail
@@ -118,28 +147,18 @@ jobs:
             -name "powerpc-eabi-cmake" \
             | head -n 1)"
 
-          if [ -n "$CMAKE_WIIU" ]; then
-            chmod +x "$CMAKE_WIIU"
-            echo "CMAKE_WIIU=$CMAKE_WIIU" >> "$GITHUB_ENV"
-            echo "Outil détecté : $CMAKE_WIIU"
-            exit 0
-          fi
-
-          TOOLCHAIN_FILE="$(find /opt/devkitpro \
-            -type f \
-            \( -iname "*wiiu*.cmake" -o -iname "*wut*.cmake" \) \
-            | head -n 1)"
-
-          if [ -z "$TOOLCHAIN_FILE" ]; then
-            echo "ERREUR : aucun outil CMake Wii U trouvé."
+          if [ -z "$CMAKE_WIIU" ]; then
+            echo "ERREUR : powerpc-eabi-cmake introuvable."
             find /opt/devkitpro -maxdepth 6 -type f \
-              \( -iname "*cmake*" -o -name "elf2rpl" -o -name "wuhbtool" \) \
+              \( -name "powerpc-eabi-cmake" -o -name "wuhbtool" -o -name "elf2rpl" \) \
               -print || true
             exit 1
           fi
 
-          echo "TOOLCHAIN_FILE=$TOOLCHAIN_FILE" >> "$GITHUB_ENV"
-          echo "Toolchain détectée : $TOOLCHAIN_FILE"
+          chmod +x "$CMAKE_WIIU"
+
+          echo "CMAKE_WIIU=$CMAKE_WIIU" >> "$GITHUB_ENV"
+          echo "CMake Wii U trouvé : $CMAKE_WIIU"
 
       - name: Configurer CubeU
         shell: bash
@@ -148,18 +167,10 @@ jobs:
 
           rm -rf "$GITHUB_WORKSPACE/build"
 
-          if [ -n "${CMAKE_WIIU:-}" ]; then
-            "$CMAKE_WIIU" \
-              -S "$PROJECT_DIR" \
-              -B "$GITHUB_WORKSPACE/build" \
-              -DCMAKE_BUILD_TYPE=Release
-          else
-            cmake \
-              -S "$PROJECT_DIR" \
-              -B "$GITHUB_WORKSPACE/build" \
-              -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
-              -DCMAKE_BUILD_TYPE=Release
-          fi
+          "$CMAKE_WIIU" \
+            -S "$PROJECT_DIR" \
+            -B "$GITHUB_WORKSPACE/build" \
+            -DCMAKE_BUILD_TYPE=Release
 
       - name: Compiler CubeU
         shell: bash
@@ -171,12 +182,12 @@ jobs:
             --parallel 2 \
             --verbose
 
-      - name: Préparer le résultat
+      - name: Préparer CubeU
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Fichiers compilés :"
+          echo "Fichiers produits :"
           find "$GITHUB_WORKSPACE/build" -type f -print
 
           WUHB_FILE="$(find "$GITHUB_WORKSPACE/build" \
@@ -185,7 +196,7 @@ jobs:
             | head -n 1)"
 
           if [ -z "$WUHB_FILE" ]; then
-            echo "ERREUR : aucun fichier WUHB produit."
+            echo "ERREUR : aucun fichier .wuhb produit."
             exit 1
           fi
 
