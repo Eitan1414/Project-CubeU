@@ -36,6 +36,5 @@ CubeU parcourt les sous-dossiers jusqu'a quatre niveaux et indexe jusqu'a 200 je
 
 La v0.0.3 ne lance pas encore les jeux. Le bouton Lancer indique clairement que le moteur GPU, le DSP audio, le lecteur de disque emule et les autres composants ne sont pas encore implementes.
 
-## Compilation
 
-Envoie le depot sur GitHub, ouvre Actions, lance `Build CubeU Wii U`, puis telecharge l'artifact `CubeU-v0.0.3`.
+Ce projet n'aura plus jamais de mise a jour du aux faite que UwUVCI AIO existe
